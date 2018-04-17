@@ -47,7 +47,12 @@ if not hasattr(pkgutil, 'find_loader'):
 
 import mitogen.core
 import mitogen.parent
+
+from mitogen.core import b
 from mitogen.core import LOG
+
+imap = getattr(itertools, 'imap', map)
+izip = getattr(itertools, 'izip', zip)
 
 
 RLOG = logging.getLogger('mitogen.ctx')
@@ -92,8 +97,12 @@ def scan_code_imports(co):
           `modname`.
     """
     # Yield `(op, oparg)` tuples from the code object `co`.
-    ordit = itertools.imap(ord, co.co_code)
-    nextb = ordit.next
+    if mitogen.core.PY3:
+        ordit = iter(co.co_code)
+        nextb = ordit.__next__
+    else:
+        ordit = imap(ord, co.co_code)
+        nextb = ordit.next
 
     opit = ((c, (None
                  if c < dis.HAVE_ARGUMENT else
@@ -108,7 +117,7 @@ def scan_code_imports(co):
     except StopIteration:
         return
 
-    for oparg1, oparg2, (op3, arg3) in itertools.izip(opit, opit2, opit3):
+    for oparg1, oparg2, (op3, arg3) in izip(opit, opit2, opit3):
         if op3 == IMPORT_NAME:
             op2, arg2 = oparg2
             op1, arg1 = oparg1
@@ -308,7 +317,7 @@ class LogForwarder(object):
             name = '%s.%s' % (RLOG.name, context.name)
             self._cache[msg.src_id] = logger = logging.getLogger(name)
 
-        name, level_s, s = msg.data.split('\x00', 2)
+        name, level_s, s = msg.data.decode('latin1').split('\x00', 2)
         logger.log(int(level_s), '%s: %s', name, s, extra={
             'mitogen_message': s,
             'mitogen_context': self._router.context_by_id(msg.src_id),
@@ -399,8 +408,15 @@ class ModuleFinder(object):
         except AttributeError:
             return
 
-        if path is not None and source is not None:
-            return path, source, is_pkg
+        if path is None or source is None:
+            return
+
+        if isinstance(source, mitogen.core.UnicodeType):
+            # get_source() returns "string" according to PEP-302, which was
+            # reinterpreted for Python 3 to mean a Unicode string.
+            source = source.encode('utf-8')
+
+        return path, source, is_pkg
 
     def _get_module_via_sys_modules(self, fullname):
         """Attempt to fetch source code via sys.modules. This is specifically
@@ -424,6 +440,11 @@ class ModuleFinder(object):
             if not is_pkg:
                 raise
             source = '\n'
+
+        if isinstance(source, mitogen.core.UnicodeType):
+            # get_source() returns "string" according to PEP-302, which was
+            # reinterpreted for Python 3 to mean a Unicode string.
+            source = source.encode('utf-8')
 
         return path, source, is_pkg
 
@@ -564,7 +585,7 @@ class ModuleResponder(object):
     def __repr__(self):
         return 'ModuleResponder(%r)' % (self._router,)
 
-    MAIN_RE = re.compile(r'^if\s+__name__\s*==\s*.__main__.\s*:', re.M)
+    MAIN_RE = re.compile(b(r'^if\s+__name__\s*==\s*.__main__.\s*:'), re.M)
 
     def whitelist_prefix(self, fullname):
         if self.whitelist == ['']:
@@ -632,7 +653,7 @@ class ModuleResponder(object):
 
         LOG.debug('%r._on_get_module(%r)', self, msg.data)
         stream = self._router.stream_by_id(msg.src_id)
-        fullname = msg.data
+        fullname = msg.data.decode()
         if fullname in stream.sent_modules:
             LOG.warning('_on_get_module(): dup request for %r from %r',
                         fullname, stream)

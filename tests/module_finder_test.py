@@ -196,7 +196,6 @@ class FindRelatedTest(testlib.TestCase):
         self.assertEquals(related, [
             'mitogen',
             'mitogen.compat',
-            'mitogen.compat.collections',
             'mitogen.compat.functools',
             'mitogen.core',
             'mitogen.master',

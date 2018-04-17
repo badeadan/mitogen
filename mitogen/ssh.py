@@ -39,14 +39,15 @@ except ImportError:
     from pipes import quote as shlex_quote
 
 import mitogen.parent
+from mitogen.core import b
 
 
 LOG = logging.getLogger('mitogen')
 
-PASSWORD_PROMPT = 'password:'
-PERMDENIED_PROMPT = 'permission denied'
-HOSTKEY_REQ_PROMPT = 'are you sure you want to continue connecting (yes/no)?'
-HOSTKEY_FAIL = 'host key verification failed.'
+PASSWORD_PROMPT = b('password:')
+PERMDENIED_PROMPT = b('permission denied')
+HOSTKEY_REQ_PROMPT = b('are you sure you want to continue connecting (yes/no)?')
+HOSTKEY_FAIL = b('host key verification failed.')
 
 
 class PasswordError(mitogen.core.StreamError):
@@ -181,7 +182,7 @@ class Stream(mitogen.parent.Stream):
 
         for buf in it:
             LOG.debug('%r: received %r', self, buf)
-            if buf.endswith('EC0\n'):
+            if buf.endswith(self.EC0_MARKER):
                 self._ec0_received()
                 return
             elif HOSTKEY_REQ_PROMPT in buf.lower():

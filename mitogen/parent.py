@@ -26,6 +26,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+import codecs
 import errno
 import fcntl
 import getpass
@@ -45,9 +46,9 @@ import types
 import zlib
 
 try:
-    from cStringIO import StringIO as BytesIO
+    from cStringIO import StringIO
 except ImportError:
-    from io import BytesIO
+    from io import StringIO
 
 if sys.version_info < (2, 7, 11):
     from mitogen.compat import tokenize
@@ -60,9 +61,13 @@ except ImportError:
     from mitogen.compat.functools import lru_cache
 
 import mitogen.core
+from mitogen.core import b
 from mitogen.core import LOG
 from mitogen.core import IOLOG
 
+
+if mitogen.core.PY3:
+    xrange = range
 
 try:
     SC_OPEN_MAX = os.sysconf('SC_OPEN_MAX')
@@ -103,11 +108,11 @@ def is_immediate_child(msg, stream):
 def minimize_source(source):
     """Remove most comments and docstrings from Python source code.
     """
-    tokens = tokenize.generate_tokens(BytesIO(source).readline)
+    tokens = tokenize.generate_tokens(StringIO(source).readline)
     tokens = strip_comments(tokens)
     tokens = strip_docstrings(tokens)
     tokens = reindent(tokens)
-    return tokenize.untokenize(tokens)
+    return tokenize.untokenize(tokens).encode('utf-8')
 
 
 def strip_comments(tokens):
@@ -386,7 +391,12 @@ def write_all(fd, s, deadline=None):
         if not wfds:
             continue
 
-        n, disconnected = mitogen.core.io_op(os.write, fd, buffer(s, written))
+        if mitogen.core.PY3:
+            window = memoryview(s)[written:]
+        else:
+            window = buffer(s, written)
+
+        n, disconnected = mitogen.core.io_op(os.write, fd, window)
         if disconnected:
             raise mitogen.core.StreamError('EOF on stream during write')
 
@@ -421,7 +431,7 @@ def iter_read(fds, deadline=None):
     if not fds:
         raise mitogen.core.StreamError(
             'EOF on stream; last 300 bytes received: %r' %
-            (''.join(bits)[-300:],)
+            (b('').join(bits)[-300:],)
         )
 
     raise mitogen.core.TimeoutError('read timed out')
@@ -465,9 +475,9 @@ def stream_by_method_name(name):
     """
     if name == 'local':
         name = 'parent'
-    Stream = None
-    exec('from mitogen.%s import Stream' % (name,))
-    return Stream
+    d = {}
+    exec('import mitogen.%s as mod; d["mod"] = mod' % (name,))
+    return d['mod'].Stream
 
 
 @mitogen.core.takes_econtext
@@ -673,11 +683,15 @@ class Stream(mitogen.core.Stream):
             os.close(w)
             os.environ['ARGV0']=sys.executable
             os.execl(sys.executable,sys.executable+'(mitogen:CONTEXT_NAME)')
-        os.write(1,'EC0\n')
+        os.write(1,'EC0\n'.encode())
         C=_(os.fdopen(0,'rb').read(PREAMBLE_COMPRESSED_LEN),'zip')
-        os.fdopen(W,'w',0).write(C)
-        os.fdopen(w,'w',0).write('PREAMBLE_LEN\n'+C)
-        os.write(1,'EC1\n')
+        wfp=os.fdopen(W,'wb',0)
+        wfp.write(C)
+        Wfp=os.fdopen(w,'wb',0)
+        Wfp.write('PREAMBLE_LEN\n'.encode()+C)
+        wfp.close()
+        Wfp.close()
+        os.write(1,'EC1\n'.encode())
 
     def get_boot_command(self):
         source = inspect.getsource(self._first_stage)
@@ -689,7 +703,8 @@ class Stream(mitogen.core.Stream):
                                 str(len(preamble_compressed)))
         source = source.replace('PREAMBLE_LEN',
                                 str(len(zlib.decompress(preamble_compressed))))
-        encoded = zlib.compress(source, 9).encode('base64').replace('\n', '')
+        compressed = zlib.compress(source.encode(), 9)
+        encoded = codecs.encode(compressed, 'base64').replace(b('\n'), b(''))
         # We can't use bytes.decode() in 3.x since it was restricted to always
         # return unicode, so codecs.decode() is used instead. In 3.x
         # codecs.decode() requires a bytes object. Since we must be compatible
@@ -698,7 +713,7 @@ class Stream(mitogen.core.Stream):
         return [
             self.python_path, '-c',
             'import codecs,os,sys;_=codecs.decode;'
-            'exec(_(_("%s".encode(),"base64"),"zip"))' % (encoded,)
+            'exec(_(_("%s".encode(),"base64"),"zip"))' % (encoded.decode(),)
         ]
 
     def get_main_kwargs(self):
@@ -753,14 +768,18 @@ class Stream(mitogen.core.Stream):
             self._reap_child()
             raise
 
+    EC0_MARKER = mitogen.core.b('EC0\n')
+    EC1_MARKER = mitogen.core.b('EC1\n')
+
     def _ec0_received(self):
         LOG.debug('%r._ec0_received()', self)
         write_all(self.transmit_side.fd, self.get_preamble())
-        discard_until(self.receive_side.fd, 'EC1\n', time.time() + 10.0)
+        discard_until(self.receive_side.fd, self.EC1_MARKER,
+                      deadline=time.time() + 10.0)
 
     def _connect_bootstrap(self, extra_fd):
         deadline = time.time() + self.connect_timeout
-        discard_until(self.receive_side.fd, 'EC0\n', deadline)
+        discard_until(self.receive_side.fd, self.EC0_MARKER, deadline)
         self._ec0_received()
 
 
@@ -851,7 +870,7 @@ class RouteMonitor(object):
         self.parent.send(
             mitogen.core.Message(
                 handle=handle,
-                data=data,
+                data=data.encode('utf-8'),
             )
         )
 
@@ -861,7 +880,8 @@ class RouteMonitor(object):
         stream, we're also responsible for broadcasting DEL_ROUTE upstream
         if/when that child disconnects.
         """
-        self.propagate(mitogen.core.ADD_ROUTE, stream.remote_id, stream.name)
+        self.propagate(mitogen.core.ADD_ROUTE, stream.remote_id,
+                       stream.name)
         mitogen.core.listen(
             obj=stream,
             name='disconnect',
@@ -886,7 +906,7 @@ class RouteMonitor(object):
         if msg.is_dead:
             return
 
-        target_id_s, _, target_name = msg.data.partition(':')
+        target_id_s, _, target_name = msg.data.partition(b(':'))
         target_id = int(target_id_s)
         self.router.context_by_id(target_id).name = target_name
         stream = self.router.stream_by_id(msg.auth_id)
@@ -1122,7 +1142,7 @@ class ModuleForwarder(object):
         if msg.is_dead:
             return
 
-        fullname = msg.data
+        fullname = msg.data.decode('utf-8')
         callback = lambda: self._on_cache_callback(msg, fullname)
         self.importer._request_module(fullname, callback)
 

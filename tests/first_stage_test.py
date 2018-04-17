@@ -4,6 +4,8 @@ import subprocess
 import unittest2
 
 import mitogen.parent
+from mitogen.core import b
+
 import testlib
 
 
@@ -35,8 +37,8 @@ class CommandLineTest(testlib.RouterMixin, testlib.TestCase):
         )
         stdout, stderr = proc.communicate()
         self.assertEquals(0, proc.returncode)
-        self.assertEquals("EC0\n", stdout)
-        self.assertIn("Error -5 while decompressing data: incomplete or truncated stream", stderr)
+        self.assertEquals(b("EC0\n"), stdout)
+        self.assertIn(b("Error -5 while decompressing data: incomplete or truncated stream"), stderr)
 
 
 if __name__ == '__main__':
