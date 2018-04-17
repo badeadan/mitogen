@@ -5,21 +5,33 @@ notifications:
 
 language: python
 cache: pip
-
 python:
 - "2.7"
+- "3.6"
 
-env:
-- MODE=mitogen DISTRO=debian
-- MODE=mitogen DISTRO=centos
-- MODE=debops_common VER=2.4.3.0
-- MODE=debops_common VER=2.5.1
-# Ansible tests.
-- MODE=ansible VER=2.4.3.0 DISTRO=debian
-- MODE=ansible VER=2.5.1 DISTRO=centos
-- MODE=ansible VER=2.5.1 DISTRO=debian
-# Sanity check our tests against vanilla Ansible, they should still pass.
-- MODE=ansible VER=2.5.1 DISTRO=debian STRATEGY=linear
+matrix:
+  include:
+  # mitogen_tests.sh
+  - python: "2.7"
+    env: MODE=mitogen DISTRO=debian
+  - python: "2.7"
+    env: MODE=mitogen DISTRO=centos
+  - python: "3.6"
+    env: MODE=mitogen DISTRO=debian
+
+  # debops
+  - python: "2.7"
+    env: MODE=debops_common VER=2.4.3.0
+  - python: "2.7"
+    env: MODE=debops_common VER=2.5.1
+
+  # ansible
+  - python: "2.7"
+    env: MODE=ansible VER=2.4.3.0 DISTRO=debian
+  - python: "2.7"
+    env: MODE=ansible VER=2.5.1 DISTRO=centos
+  - python: "2.7"
+    env: MODE=ansible VER=2.5.1 DISTRO=debian
 
 install:
 - pip install -r dev_requirements.txt
